@@ -1,0 +1,3 @@
+[submodule "external/cmph"]
+	path = external/cmph
+	url = https://git.code.sf.net/p/cmph/git

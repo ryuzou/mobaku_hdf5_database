@@ -1,39 +1,46 @@
+#include "hdf5_ops.h"
+#include <pthread.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include "hdf5_ops.h"  // ライブラリのヘッダ
 
-#define TEST_FILE       "test_example.h5"
-#define TEST_DATASET    "test_dataset"
-#define D0  5
-#define D1  50
-#define D2  60
+#define DATASET_SIZE 100
+#define NUM_THREADS 4
 
-int main(void)
-{
-    // 1. データセットを書き込むテスト
-    int ret = write_3d_float_dataset(TEST_FILE, TEST_DATASET, D0, D1, D2);
-    if (ret < 0) {
-        fprintf(stderr, "write_3d_float_dataset() failed.\n");
-        return 1;
-    }
-    printf("Created and wrote dataset: %s in %s\n", TEST_DATASET, TEST_FILE);
+typedef struct {
+    hdf5_thread_safe_t* hdf5;
+    int thread_id;
+} thread_data_t;
 
-    // 2. 単一要素を読み込むテスト
-    float val = 0.0f;
-    ret = read_single_float_value(TEST_FILE, TEST_DATASET, 2, 10, 20, &val);
-    if (ret < 0) {
-        fprintf(stderr, "read_single_float_value() failed.\n");
-        return 1;
-    }
-    printf("Read [2,10,20] = %f (expected: 2+10+20=32.0)\n", val);
+void* thread_function(void* arg) {
+    thread_data_t* data = (thread_data_t*)arg;
+    int write_data[DATASET_SIZE];
 
-    // 3. 簡易判定
-    if (val == 32.0f) {
-        printf("Test passed!\n");
-    } else {
-        printf("Test mismatch! expected=32.0\n");
-        return 1;
+    // 書き込むデータを生成
+    for (int i = 0; i < DATASET_SIZE; i++) {
+        write_data[i] = data->thread_id * DATASET_SIZE + i;
     }
 
+    // データを書き込む
+    hdf5_write(data->hdf5, write_data, data->thread_id * DATASET_SIZE, DATASET_SIZE);
+    return NULL;
+}
+
+int main() {
+    hdf5_thread_safe_t* hdf5 = hdf5_create("example.h5", "MyDataset", DATASET_SIZE * NUM_THREADS);
+
+    pthread_t threads[NUM_THREADS];
+    thread_data_t thread_data[NUM_THREADS];
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        thread_data[i].hdf5 = hdf5;
+        thread_data[i].thread_id = i;
+        pthread_create(&threads[i], NULL, thread_function, &thread_data[i]);
+    }
+
+    for (int i = 0; i < NUM_THREADS; i++) {
+        pthread_join(threads[i], NULL);
+    }
+
+    hdf5_close(hdf5);
+    printf("データの書き込みが完了しました。\n");
     return 0;
 }

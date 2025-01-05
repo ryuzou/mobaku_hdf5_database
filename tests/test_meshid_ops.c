@@ -27,10 +27,9 @@ int main() {
     // 乱数生成の初期化
     srand((unsigned int)time(NULL));
 
-    // 検索するキーを1万個生成
     uint32_t *keys = malloc(meshid_list_size * sizeof(uint32_t));
     for (int i = 0; i < meshid_list_size; i++) {
-        keys[i] = meshid_list[i]; // meshid_list_size内の乱数を生成
+        keys[i] = meshid_list[i];
     }
     printf("Total length of meshid: %lu\n",meshid_list_size);
 

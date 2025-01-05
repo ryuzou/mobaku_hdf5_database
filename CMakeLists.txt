@@ -43,13 +43,11 @@ if(NOT EXISTS ${LOCAL_INCLUDE}/lib/libcmph.so)
 endif()
 
 set(CMPH_INCLUDE_DIRS ${LOCAL_INCLUDE}/include)
-set(CMPH_LIBRARIES cmph)    # I hate conda
-#message("PostgreSQL Include Dirs: ${PostgreSQL_INCLUDE_DIRS}")
-#message("PostgreSQL Libraries: ${PostgreSQL_LIBRARIES}")
+set(CMPH_LIBRARIES cmph)
 
 SET(OBJS
         ${CMAKE_CURRENT_SOURCE_DIR}/external/meshids/meshid_mobaku.o
-        ${CMAKE_CURRENT_SOURCE_DIR}/external/meshids/meshid_hash_mphf.o
+        ${CMAKE_CURRENT_SOURCE_DIR}/external/meshids/meshid_mobaku_mph.o
 )
 
 add_library(hdf5_lib

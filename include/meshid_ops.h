@@ -14,9 +14,9 @@ extern "C" {
 
 extern const size_t meshid_list_size;
 extern const uint32_t meshid_list[];
-extern unsigned char _binary_meshid_hash_mphf_start;
-extern unsigned char _binary_meshid_hash_mphf_end;
-extern unsigned char _binary_meshid_hash_mphf_size;
+extern unsigned char _binary_meshid_mobaku_mph_start[];
+extern unsigned char _binary_meshid_mobaku_mph_end[];
+extern unsigned char _binary_meshid_mobaku_mph_size[];
 
 #ifdef __cplusplus
 }

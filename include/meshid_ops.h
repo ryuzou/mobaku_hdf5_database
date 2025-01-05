@@ -7,6 +7,10 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <cmph.h>
+#include <string.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -21,5 +25,14 @@ extern unsigned char _binary_meshid_mobaku_mph_size[];
 #ifdef __cplusplus
 }
 #endif
+
+void uint2str(unsigned int num, char *str);
+
+// 検索準備関数
+cmph_t* prepare_search(void);
+
+// 検索関数
+uint32_t search_id(cmph_t *hash, uint32_t key);
+
 
 #endif //MESHID_OPS_H

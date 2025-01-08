@@ -74,6 +74,17 @@ target_link_libraries(hdf5_lib PUBLIC
 add_compile_options(-mavx -mavx2)
 add_compile_options(-mavx512f -mavx512dq -mavx512cd -mavx512bw -mavx512vl)
 
+
+# CLI Executable
+add_executable(create_hdf5_database_from_pg
+        src/create_hdf5_database_from_pg.c
+)
+
+target_link_libraries(create_hdf5_database_from_pg
+        hdf5_lib
+)
+# Tests
+
 add_executable(test_hdf5_ops
         tests/test_hdf5_ops.c
 )
@@ -123,6 +134,15 @@ target_include_directories(test_meshid_ops PUBLIC
 target_link_libraries(test_meshid_ops PUBLIC
         hdf5_lib
 )
+
+add_executable(test_pg2hdf5Queue
+        tests/test_pg2hdf5Queue.c
+)
+
+target_link_libraries(test_pg2hdf5Queue PUBLIC
+        hdf5_lib
+)
+
 
 SET_SOURCE_FILES_PROPERTIES(
         ${OBJS}

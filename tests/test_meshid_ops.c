@@ -13,7 +13,6 @@
 int main() {
     printf("Mesh ID list size: %zu\n", meshid_list_size);
 
-    // 最初の100個のメッシュIDを表示
     for (size_t i = 0; i < meshid_list_size && i < 10; ++i) {
         printf("Mesh ID[%zu]: %d\n", i, meshid_list[i]);
     }

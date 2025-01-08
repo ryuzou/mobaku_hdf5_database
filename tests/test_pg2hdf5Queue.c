@@ -16,7 +16,6 @@
 #define MESHLIST_ONCE_LEN 16
 
 
-// データ型
 typedef struct {
     int rows;
     int cols;
@@ -28,7 +27,6 @@ typedef struct {
     uint32_t *meshid_list;
 } MeshidList;
 
-// キューの構造体 (void* を使用)
 typedef struct {
     void *queue[QUEUE_SIZE];
     int head;
@@ -44,7 +42,6 @@ typedef struct {
     FIFOQueue * MeshlistQueue;
 } ProducerObject;
 
-// キューの初期化
 void init_queue(FIFOQueue *q) {
     q->head = 0;
     q->tail = 0;
@@ -54,7 +51,6 @@ void init_queue(FIFOQueue *q) {
     sem_init(&q->empty, 0, 0);
 }
 
-// エンキュー (void* を使用)
 void enqueue(FIFOQueue *q, void *data) {
     sem_wait(&q->full);
     pthread_mutex_lock(&q->mutex);
@@ -65,7 +61,6 @@ void enqueue(FIFOQueue *q, void *data) {
     sem_post(&q->empty);
 }
 
-// デキュー (void* を使用)
 void *dequeue(FIFOQueue *q) {
     sem_wait(&q->empty);
     pthread_mutex_lock(&q->mutex);
@@ -183,11 +178,9 @@ int main() {
 
     pthread_t producer_threads[NUM_PRODUCERS], consumer_thread, meshlist_producer_pthread;
 
-    // ProducerObjectの配列を作成
     ProducerObject producer_objects[NUM_PRODUCERS];
 
     pthread_create(&meshlist_producer_pthread, NULL, meshlist_producer, &meshid_queue);
-    // 生産者スレッドの作成
     for (int i = 0; i < NUM_PRODUCERS; i++) {
         producer_objects[i].DataQueue = &data_queue;
         producer_objects[i].MeshlistQueue = &meshid_queue;

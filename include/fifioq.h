@@ -9,7 +9,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 
-#define QUEUE_SIZE 1000
+#define QUEUE_SIZE 1024
 
 typedef struct {
     void *queue[QUEUE_SIZE];

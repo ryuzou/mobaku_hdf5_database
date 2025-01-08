@@ -12,121 +12,138 @@
 
 #include "env_reader.h"
 #include "db_credentials.h"
+#include "meshid_ops.h"
+#include "fifioq.h"
 
-#define FETCH_SIZE 1000
-#define QUEUE_SIZE 1024 // FIFOキューのサイズ
+#define NUM_PRODUCERS 2
+#define NUM_ITEMS_PER_PRODUCER 30
+#define QUEUE_SIZE 100
+#define MESHLIST_ONCE_LEN 16
 
-// ==== クエリ結果格納構造体 =====================================
 typedef struct {
-    uint32_t *result;
-    int mesh_id; //どのメッシュIDのクエリ結果か
-} QueryResult;
+    int rows;
+    int cols;
+    int *data;
+} PQdataMatrix;
 
-// ==== FIFOキュー ===============================================
 typedef struct {
-    QueryResult *data[QUEUE_SIZE];
-    int head;
-    int tail;
-    int count;
-    pthread_mutex_t mutex;
-    sem_t sem_full; // キューが満杯かどうか
-    sem_t sem_empty; // キューが空かどうか
-} DataFIFOQueue;
+    int meshid_number;
+    uint32_t *meshid_list;
+} MeshidList;
 
-// FIFOキューの初期化
-void init_fifo_queue(DataFIFOQueue *queue) {
-    queue->head = 0;
-    queue->tail = 0;
-    queue->count = 0;
-    pthread_mutex_init(&queue->mutex, NULL);
-    sem_init(&queue->sem_full, 0, QUEUE_SIZE);
-    sem_init(&queue->sem_empty, 0, 0);
+
+typedef struct {
+    FIFOQueue *DataQueue;
+    FIFOQueue * MeshlistQueue;
+    const char * conninfo;
+} ProducerObject;
+
+// データ解放関数
+void free_pqdata_matrix(void *data) {
+    PQdataMatrix *m = (PQdataMatrix *)data;
+    free(m->data);
+    free(m);
 }
 
-// FIFOキューへのデータ追加
-void enqueue(DataFIFOQueue *queue, QueryResult *result) {
-    sem_wait(&queue->sem_full); // キューが満杯なら待機
-    pthread_mutex_lock(&queue->mutex);
-    queue->data[queue->tail] = result;
-    queue->tail = (queue->tail + 1) % QUEUE_SIZE;
-    queue->count++;
-    pthread_mutex_unlock(&queue->mutex);
-    sem_post(&queue->sem_empty); // キューが空でなくなったことを通知
+void free_meshid_list(void *data) {
+    MeshidList *ml = (MeshidList *)data;
+    free(ml->meshid_list);
+    free(ml);
 }
 
-// FIFOキューからのデータ取り出し
-QueryResult *dequeue(DataFIFOQueue *queue) {
-    sem_wait(&queue->sem_empty); // キューが空なら待機
-    pthread_mutex_lock(&queue->mutex);
-    QueryResult *result = queue->data[queue->head];
-    queue->head = (queue->head + 1) % QUEUE_SIZE;
-    queue->count--;
-    pthread_mutex_unlock(&queue->mutex);
-    sem_post(&queue->sem_full); // キューに空きができたことを通知
-    return result;
-}
-
-// FIFOキューの破棄
-void destroy_fifo_queue(DataFIFOQueue *queue) {
-    pthread_mutex_destroy(&queue->mutex);
-    sem_destroy(&queue->sem_full);
-    sem_destroy(&queue->sem_empty);
-}
-
-
-// スレッド関数
-void *query_thread(void *arg) {
-    struct thread_data {
-        int mesh_id;
-        const char *db_uri;
-        DataFIFOQueue *queue;
-    };
-    struct thread_data *data = (struct thread_data*)arg;
-    PGconn *conn = PQconnectdb(data->db_uri);
+void *producer(void *arg) {
+    ProducerObject *obj = (ProducerObject *)arg;
+    PGconn *conn = PQconnectdb(obj->conninfo);
     if (PQstatus(conn) != CONNECTION_OK) {
         fprintf(stderr, "Connection to database failed: %s\n", PQerrorMessage(conn));
         PQfinish(conn);
         pthread_exit(NULL); // スレッド終了
     }
+    FIFOQueue *data_queue = obj->DataQueue;
+    FIFOQueue * meshlist_queue = obj->MeshlistQueue;
 
-    char query[256];
-    snprintf(query, sizeof(query), "SELECT * FROM population_00000 WHERE mesh_id = %d ORDER BY datetime", data->mesh_id);
-
-    PGresult *res = PQexec(conn, query);
-
-    QueryResult *qr = (QueryResult *)malloc(sizeof(QueryResult));
-    qr->result = res;
-    qr->mesh_id = data->mesh_id;
-
-    enqueue(data->queue, qr);
+    while (true) {
+        MeshidList *meshid_list = dequeue(meshlist_queue);
+        if (meshid_list == nullptr) {
+            break;
+        }
+        PQdataMatrix *m = (PQdataMatrix *)malloc(sizeof(PQdataMatrix));
+        m->rows = 100;
+        m->cols = meshid_list->meshid_number;
+        m->data = (int *)malloc(sizeof(int) * m->rows * m->cols);
+        if (m->data == NULL) {
+            perror("malloc failed");
+            exit(1);
+        }
+        char query[256];
+        snprintf(query, sizeof(query), "SELECT * FROM population_00000 WHERE mesh_id = %d ORDER BY datetime", meshid_list->meshid_number);
+        //todo
+        PGresult *res = PQexec(conn, query);
+        for (int j = 0; j < m->rows; j++) {
+            for (int k = 0; k < m->cols; k++) {
+                m->data[j * m->cols + k] = 1234;
+            }
+        }
+        enqueue(data_queue, m);
+        free_meshid_list(meshid_list);
+    }
+    enqueue(data_queue, nullptr);
     PQfinish(conn);
     pthread_exit(NULL);
 }
 
-int* get_all_meshes_in_1st_mesh(int meshid_1, size_t *num_meshes) {
-    *num_meshes = 8 * 8 * 10 * 10 * 4;
-    int *mesh_ids = (int*)malloc(*num_meshes * sizeof(int));
-    if (!mesh_ids) {
-        perror("malloc failed");
-        exit(EXIT_FAILURE);
+void *consumer(void *arg) {
+    FIFOQueue *q = (FIFOQueue *)arg;
+    int nulp_counter = 0;
+    while (true) {
+        PQdataMatrix *m = dequeue(q);
+        if (m == nullptr) {
+            nulp_counter++;
+            if (nulp_counter == NUM_PRODUCERS) {
+                break;
+            }
+            continue;
+        }
+        printf("Consumed matrix (rows: %d, cols: %d)\n",m->rows, m->cols);
+        free_pqdata_matrix(m);
+    }
+    pthread_exit(NULL);
+}
+
+void *meshlist_producer(void *arg) {
+    FIFOQueue *meshid_queue = (FIFOQueue *)arg;
+    int i;
+    for (i = 0; i < (int)(meshid_list_size / MESHLIST_ONCE_LEN); ++i) {
+        uint32_t *meshid_once_list = (int *)malloc(MESHLIST_ONCE_LEN * sizeof(uint32_t));
+        MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
+        m->meshid_number = MESHLIST_ONCE_LEN;
+        for (int j = 0; j < MESHLIST_ONCE_LEN; ++j) {
+            meshid_once_list[j] = meshid_list[i * MESHLIST_ONCE_LEN + j];
+        }
+        m->meshid_list = meshid_once_list;
+        enqueue(meshid_queue, m);
+
+        printf("Progress: %d / %lu\n",
+               i * MESHLIST_ONCE_LEN,
+               meshid_list_size);
+    }
+    if (meshid_list_size % MESHLIST_ONCE_LEN != 0) {
+        uint32_t *meshid_once_list = (int *)malloc((meshid_list_size % MESHLIST_ONCE_LEN) * sizeof(uint32_t));
+        MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
+        m->meshid_number = (meshid_list_size % MESHLIST_ONCE_LEN);
+        for (int j = 0; j < meshid_list_size % MESHLIST_ONCE_LEN; ++j) {
+            meshid_once_list[j] = meshid_list[i * MESHLIST_ONCE_LEN + j];
+        }
+        m->meshid_list = meshid_once_list;
+        enqueue(meshid_queue, m);
+    }
+    for (int k = 0; k < NUM_PRODUCERS; ++k) {
+        enqueue(meshid_queue, nullptr);
     }
 
-    int index = 0;
-    for (int q = 0; q < 8; q++) {
-        for (int v = 0; v < 8; v++) {
-            for (int r = 0; r < 10; r++) {
-                for (int w = 0; w < 10; w++) {
-                    for (int s = 0; s < 4; s++) {
-                        int m = s + 1;
-                        mesh_ids[index] = meshid_1 * 100000 + q * 10000 + v * 1000 + r * 100 + w * 10 + m;
-                        index++;
-                    }
-                }
-            }
-        }
-    }
-    return mesh_ids;
+    pthread_exit(NULL);
 }
+
 
 int main(int argc, char* argv[]) {
     const char* env_filepath = ".env";
@@ -149,62 +166,33 @@ int main(int argc, char* argv[]) {
              "host=%s port=%s dbname=%s user=%s password=%s",
              creds->host, creds->port, creds->dbname, creds->user, creds->password);
 
+    FIFOQueue data_queue;
+    FIFOQueue meshid_queue;
+    init_queue(&data_queue);
+    init_queue(&meshid_queue);
 
-    PGconn *conn = PQconnectdb(conninfo);
 
-    if (PQstatus(conn) != CONNECTION_OK) {
-        fprintf(stderr, "Connection to database failed: %s\n", PQerrorMessage(conn));
-        PQfinish(conn);
-        free_credentials(creds);
-        return 1;
+    pthread_t producer_threads[NUM_PRODUCERS], consumer_thread, meshlist_producer_pthread;
+
+    ProducerObject producer_objects[NUM_PRODUCERS];
+
+    pthread_create(&meshlist_producer_pthread, NULL, meshlist_producer, &meshid_queue);
+    for (int i = 0; i < NUM_PRODUCERS; i++) {
+        producer_objects[i].DataQueue = &data_queue;
+        producer_objects[i].MeshlistQueue = &meshid_queue;
+        producer_objects[i].conninfo = conninfo;
+        pthread_create(&producer_threads[i], NULL, producer, &producer_objects[i]);
     }
 
-    size_t num_meshes;
-    int *mesh_ids = get_all_meshes_in_1st_mesh(first_meshid, &num_meshes);
+    pthread_create(&consumer_thread, NULL, consumer, &data_queue);
 
-    DataFIFOQueue queue;
-    init_fifo_queue(&queue);
+    pthread_join(meshlist_producer_pthread, NULL);
 
-    pthread_t threads[num_meshes];
-    struct thread_data thread_data_array[num_meshes];
-
-    for (size_t i = 0; i < num_meshes; i++) {
-        thread_data_array[i].mesh_id = mesh_ids[i];
-        thread_data_array[i].db_uri = conninfo;
-        thread_data_array[i].queue = &queue;
-        pthread_create(&threads[i], NULL, query_thread, &thread_data_array[i]);
+    for (int i = 0; i < NUM_PRODUCERS; i++) {
+        pthread_join(producer_threads[i], NULL);
     }
+    pthread_join(consumer_thread, NULL);
 
-    // メインスレッドで結果を処理
-    for (size_t i = 0; i < num_meshes; i++) {
-        QueryResult *qr = dequeue(&queue);
-        PGresult *res = qr->result;
-        int mesh_id = qr->mesh_id;
-
-        if (PQresultStatus(res) == PGRES_TUPLES_OK) {
-            int rows = PQntuples(res);
-            int cols = PQnfields(res);
-            for (int j = 0; j < rows; j++) {
-                printf("Mesh ID: %d\t", mesh_id);
-                for (int k = 0; k < cols; k++) {
-                    printf("%s: %s\t", PQfname(res, k), PQgetvalue(res, j, k));
-                }
-                printf("\n");
-            }
-        } else {
-            fprintf(stderr, "Query for mesh_id %d failed: %s\n", mesh_id, PQerrorMessage(res));
-        }
-
-        PQclear(res);
-        free(qr);
-    }
-
-    for (size_t i = 0; i < num_meshes; i++) {
-        pthread_join(threads[i], NULL);
-    }
-
-    destroy_fifo_queue(&queue);
-    free(mesh_ids);
-    free_credentials(creds);
+    printf("All threads finished.\n");
     return 0;
 }

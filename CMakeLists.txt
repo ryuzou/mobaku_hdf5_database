@@ -56,6 +56,7 @@ add_library(hdf5_lib
         src/db_credentials.c
         src/meshid_ops.c
         ${OBJS}
+        src/fifioq.c
 )
 
 target_include_directories(hdf5_lib PUBLIC

@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include "meshid_ops.h"
+#include "fifioq.h"
 
 #define NUM_PRODUCERS 2
 #define NUM_ITEMS_PER_PRODUCER 30
@@ -27,50 +28,11 @@ typedef struct {
     uint32_t *meshid_list;
 } MeshidList;
 
-typedef struct {
-    void *queue[QUEUE_SIZE];
-    int head;
-    int tail;
-    int count;
-    pthread_mutex_t mutex;
-    sem_t full;
-    sem_t empty;
-} FIFOQueue;
 
 typedef struct {
     FIFOQueue *DataQueue;
     FIFOQueue * MeshlistQueue;
 } ProducerObject;
-
-void init_queue(FIFOQueue *q) {
-    q->head = 0;
-    q->tail = 0;
-    q->count = 0;
-    pthread_mutex_init(&q->mutex, NULL);
-    sem_init(&q->full, 0, QUEUE_SIZE);
-    sem_init(&q->empty, 0, 0);
-}
-
-void enqueue(FIFOQueue *q, void *data) {
-    sem_wait(&q->full);
-    pthread_mutex_lock(&q->mutex);
-    q->queue[q->tail] = data;
-    q->tail = (q->tail + 1) % QUEUE_SIZE;
-    q->count++;
-    pthread_mutex_unlock(&q->mutex);
-    sem_post(&q->empty);
-}
-
-void *dequeue(FIFOQueue *q) {
-    sem_wait(&q->empty);
-    pthread_mutex_lock(&q->mutex);
-    void *data = q->queue[q->head];
-    q->head = (q->head + 1) % QUEUE_SIZE;
-    q->count--;
-    pthread_mutex_unlock(&q->mutex);
-    sem_post(&q->full);
-    return data;
-}
 
 // データ解放関数
 void free_pqdata_matrix(void *data) {

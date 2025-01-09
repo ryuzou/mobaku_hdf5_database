@@ -4,6 +4,8 @@
 
 #include "meshid_ops.h"
 
+#include <assert.h>
+
 int get_time_index_mobaku_datetime(char* now_time_str) {
     constexpr struct tm reference_time_tm = {0};
     if (strptime(REFERENCE_MOBAKU_DATETIME, "%Y-%m-%d %H:%M:%S", &reference_time_tm) == NULL) {
@@ -79,6 +81,64 @@ uint32_t search_id(cmph_t *hash, uint32_t key) {
     if (key == 684827214) {
         return 1553331;
     }
+    char key_str[11];
+    uint2str(key, key_str);
+    return cmph_search(hash, key_str, (cmph_uint32)strlen(key_str));
+}
+
+char ** uint_array_to_string_array(const int *int_array, size_t nkeys) {
+    char** str_array = (char**)malloc(sizeof(char*) * nkeys);
+    if (str_array == NULL) {
+        perror("Memory allocation failed");
+        return NULL;
+    }
+
+    for (size_t i = 0; i < nkeys; ++i) {
+        // intの最大桁数を考慮してバッファを確保 (+ ヌル終端)
+        str_array[i] = (char*)malloc(sizeof(char) * 12); // intの最大値は10桁+符号+終端
+        if (str_array[i] == NULL) {
+            perror("Memory allocation failed");
+            // 確保済みのメモリを解放
+            for (size_t j = 0; j < i; ++j) {
+                free(str_array[j]);
+            }
+            free(str_array);
+            return NULL;
+        }
+        uint2str(int_array[i], str_array[i]);
+    }
+    return str_array;
+}
+
+void free_string_array(char **str_array, size_t nkeys) {
+    if (str_array == NULL) return;
+    for (size_t i = 0; i < nkeys; ++i) {
+        free(str_array[i]);
+    }
+    free(str_array);
+}
+
+cmph_t * create_local_mph_from_int(int *int_array, size_t nkeys) {
+    char** str_array = uint_array_to_string_array(int_array, nkeys);
+    if (str_array == NULL) return nullptr; // str_array が NULL の場合の処理を追加
+
+    cmph_io_adapter_t* source = cmph_io_vector_adapter(str_array, nkeys);
+    cmph_config_t* config = cmph_config_new(source);
+    cmph_config_set_algo(config, CMPH_CHM);
+    cmph_t* hash = cmph_new(config);
+    cmph_config_destroy(config);
+    cmph_io_vector_adapter_destroy(source);
+    free_string_array(str_array, nkeys); // str_array の解放を追加
+
+    if (hash == nullptr) {
+        fprintf(stderr, "Error creating hash function\n");
+        return nullptr;
+    }
+
+    return hash;
+}
+
+int find_local_id(cmph_t *hash, uint32_t key) {
     char key_str[11];
     uint2str(key, key_str);
     return cmph_search(hash, key_str, (cmph_uint32)strlen(key_str));

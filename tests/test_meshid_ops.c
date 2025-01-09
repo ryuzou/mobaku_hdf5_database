@@ -20,7 +20,7 @@ int main() {
     printf("Mesh ID list size: %zu\n", meshid_list_size);
 
     for (size_t i = 0; i < meshid_list_size && i < 10; ++i) {
-        printf("Mesh ID[%zu]: %d\n", i, meshid_list[i]);
+        //printf("Mesh ID[%zu]: %d\n", i, meshid_list[i]);
     }
 
     // 検索準備
@@ -55,11 +55,11 @@ int main() {
     cmph_destroy(hash);
 
     TestCase test_cases[] = {
-        {"2016-01-01 01:00:00", 0, "基準時刻と同一"},
-        {"2016-01-01 02:00:00", 1, "1時間後"},
+        {"2016-01-01 00:00:00", 0, "基準時刻と同一"},
+        {"2016-01-01 01:00:00", 1, "1時間後"},
         {"2015-12-31 23:00:00", -1, "2時間前 (前日)"},
-        {"2016-01-02 01:00:00", 24, "1日後"},
-        {"2015-12-31 01:00:00", -1, "1日前"},
+        {"2016-01-02 00:00:00", 24, "1日後"},
+        {"2015-12-31 00:00:00", -1, "1日前"},
         {"invalid time string", -1, "不正な日付文字列"},
         {"2016-01-01 25:00:0", -1, "不正な日付文字列"},
         {"2016-01-01 -1:00:00", -1, "不正な日付文字列"},
@@ -70,16 +70,28 @@ int main() {
 
     for (int i = 0; i < num_test_cases; ++i) {
         int actual_return_value = get_time_index_mobaku_datetime((char*)test_cases[i].input_time_str);
-
-        // テスト結果の出力
-        printf("Test Case: %s\n", test_cases[i].test_case_name);
-        printf("Input: %s\n", test_cases[i].input_time_str);
-        printf("Expected: %d, Actual: %d\n", test_cases[i].expected_return_value, actual_return_value);
-
         // assertで結果を検証
         assert(actual_return_value == test_cases[i].expected_return_value);
-        printf("Test Passed!\n\n");
     }
+    printf("Datetime index transition test passed\n");
+
+    start_time = clock();
+    int uint_list[] = {362335691,362335692,362335693,362335694,362335791,362335792,362335793,362335794,362335891,362335892,362335893,362335894,362335991,362335992,362335993,362335994};
+    int num_elements = sizeof(uint_list) / sizeof(int);
+    cmph_t *local_hash = create_local_mph_from_int(uint_list, num_elements);
+    assert(local_hash != nullptr);
+    for (size_t i = 0; i < num_elements; ++i) {
+        int key = uint_list[i];
+        int index = find_local_id(local_hash, key);
+        assert(index == i);
+        printf("my_list[%zu] (%d) index: %d\n", i, key, index);
+    }
+    end_time = clock();
+    time_taken = (double)(end_time - start_time) / CLOCKS_PER_SEC;
+
+    printf("Time taken for little hash search %f seconds\n", time_taken);
+    printf("Little local hash test passed\n");
+
 
     printf("All tests passed!\n");
     return 0;

@@ -1,6 +1,4 @@
-#define _XOPEN_SOURCE
-#define _POSIX_C_SOURCE 200809L
-
+#include <assert.h>
 #include <stdio.h>
 #include <libpq-fe.h>
 #include <stdlib.h>
@@ -135,7 +133,7 @@ void *producer(void *arg) {
 
         for (int j = 0; j < num_rows && j < m->rows; j++) {
             char *datetime_value = PQgetvalue(res, j, pq_datetime_key);
-            printf("datetime %s\n", datetime_value);
+            int time_index = get_time_index_mobaku_datetime(datetime_value);
 
             // for(int mesh_index = 0; mesh_index < meshid_list->meshid_number; mesh_index++){
             //     bool found = false;

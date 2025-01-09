@@ -10,6 +10,12 @@
 #include <assert.h>
 #include "meshid_ops.h"
 
+typedef struct {
+    const char* input_time_str;
+    int expected_return_value;
+    const char* test_case_name; // テストケース名を追加
+} TestCase;
+
 int main() {
     printf("Mesh ID list size: %zu\n", meshid_list_size);
 
@@ -24,7 +30,7 @@ int main() {
     }
 
     // 乱数生成の初期化
-    srand((unsigned int)time(NULL));
+    srand((unsigned int)time(nullptr));
 
     uint32_t *keys = malloc(meshid_list_size * sizeof(uint32_t));
     for (int i = 0; i < meshid_list_size; i++) {
@@ -47,5 +53,34 @@ int main() {
     // メモリ解放
     free(keys);
     cmph_destroy(hash);
+
+    TestCase test_cases[] = {
+        {"2016-01-01 01:00:00", 0, "基準時刻と同一"},
+        {"2016-01-01 02:00:00", 1, "1時間後"},
+        {"2015-12-31 23:00:00", -1, "2時間前 (前日)"},
+        {"2016-01-02 01:00:00", 24, "1日後"},
+        {"2015-12-31 01:00:00", -1, "1日前"},
+        {"invalid time string", -1, "不正な日付文字列"},
+        {"2016-01-01 25:00:0", -1, "不正な日付文字列"},
+        {"2016-01-01 -1:00:00", -1, "不正な日付文字列"},
+        {"2016/01/01 01:00:00", -1, "不正な日付文字列(区切り文字不正)"}
+    };
+
+    int num_test_cases = sizeof(test_cases) / sizeof(TestCase);
+
+    for (int i = 0; i < num_test_cases; ++i) {
+        int actual_return_value = get_time_index_mobaku_datetime((char*)test_cases[i].input_time_str);
+
+        // テスト結果の出力
+        printf("Test Case: %s\n", test_cases[i].test_case_name);
+        printf("Input: %s\n", test_cases[i].input_time_str);
+        printf("Expected: %d, Actual: %d\n", test_cases[i].expected_return_value, actual_return_value);
+
+        // assertで結果を検証
+        assert(actual_return_value == test_cases[i].expected_return_value);
+        printf("Test Passed!\n\n");
+    }
+
+    printf("All tests passed!\n");
     return 0;
 }

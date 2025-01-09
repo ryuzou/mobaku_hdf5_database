@@ -111,35 +111,59 @@ void *producer(void *arg) {
         }
 
         int data_index = 0;
+        int pq_meshid_key = -1;
+        int pq_datetime_key = -1;
+        int pq_population_key = -1;
+        for (int k = 0; k < num_fields; k++) {
+            const char* fieldName = PQfname(res, k);
+            if (strcmp(fieldName, "mesh_id") == 0) {
+                pq_meshid_key = k;
+            } else if (strcmp(fieldName, "datetime") == 0) {
+                pq_datetime_key = k;
+            } else if (strcmp(fieldName, "population") == 0) {
+                pq_population_key = k;
+            }
+        }
+        if (pq_meshid_key == -1 || pq_datetime_key == -1 || pq_population_key == -1) {
+            fprintf(stderr, "KEY ERROR");
+            PQclear(res);
+            free(m->data);
+            free(m);
+            free_meshid_list(meshid_list);
+            continue;
+        }
 
         for (int j = 0; j < num_rows && j < m->rows; j++) {
-            for(int mesh_index = 0; mesh_index < meshid_list->meshid_number; mesh_index++){
-                bool found = false;
-                for(int k = 0; k < num_fields; k++){
-                    if(strcmp(PQfname(res, k), "mesh_id") == 0){
-                        char *mesh_id_val = PQgetvalue(res, j, k);
-                        if(mesh_id_val != NULL && atoi(mesh_id_val) == meshid_list->meshid_list[mesh_index]){
-                            found = true;
-                            break;
-                        }
-                    }
-                }
-                if(found){
-                  for(int k = 0; k < num_fields; k++){
-                    if(strcmp(PQfname(res, k), "datetime") == 0){
-                        char *value = PQgetvalue(res, j, k);
-                        if (value != NULL) {
-                            m->data[j * m->cols + mesh_index] = atoi(value);
-                        } else {
-                            m->data[j * m->cols + mesh_index] = 0;
-                        }
-                        break;
-                    }
-                  }
-                } else{
-                    m->data[j * m->cols + mesh_index] = 0;
-                }
-            }
+            char *datetime_value = PQgetvalue(res, j, pq_datetime_key);
+            printf("datetime %s\n", datetime_value);
+
+            // for(int mesh_index = 0; mesh_index < meshid_list->meshid_number; mesh_index++){
+            //     bool found = false;
+            //     for(int k = 0; k < num_fields; k++){
+            //         if(strcmp(PQfname(res, k), "mesh_id") == 0){
+            //             char *mesh_id_val = PQgetvalue(res, j, k);
+            //             if(mesh_id_val != NULL && atoi(mesh_id_val) == meshid_list->meshid_list[mesh_index]){
+            //                 found = true;
+            //                 break;
+            //             }
+            //         }
+            //     }
+            //     if(found){
+            //       for(int k = 0; k < num_fields; k++){
+            //         if(strcmp(PQfname(res, k), "datetime") == 0){
+            //             char *value = PQgetvalue(res, j, k);
+            //             if (value != NULL) {
+            //                 m->data[j * m->cols + mesh_index] = atoi(value);
+            //             } else {
+            //                 m->data[j * m->cols + mesh_index] = 0;
+            //             }
+            //             break;
+            //         }
+            //       }
+            //     } else{
+            //         m->data[j * m->cols + mesh_index] = 0;
+            //     }
+            // }
         }
         PQclear(res);
         enqueue(data_queue, m);

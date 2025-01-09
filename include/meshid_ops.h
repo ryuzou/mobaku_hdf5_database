@@ -5,6 +5,9 @@
 #ifndef MESHID_OPS_H
 #define MESHID_OPS_H
 
+#define _XOPEN_SOURCE
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdint.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -25,6 +28,10 @@ extern unsigned char _binary_meshid_mobaku_mph_size[];
 #ifdef __cplusplus
 }
 #endif
+
+#define REFERENCE_MOBAKU_DATETIME "2016-01-01 01:00:00"
+
+int get_time_index_mobaku_datetime(char *now_time_str);
 
 void uint2str(unsigned int num, char *str);
 

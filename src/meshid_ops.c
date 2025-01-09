@@ -4,6 +4,38 @@
 
 #include "meshid_ops.h"
 
+int get_time_index_mobaku_datetime(char* now_time_str) {
+    constexpr struct tm reference_time_tm = {0};
+    if (strptime(REFERENCE_MOBAKU_DATETIME, "%Y-%m-%d %H:%M:%S", &reference_time_tm) == NULL) {
+        fprintf(stderr, "Failed to parse first datetime_str\n");
+        return -1;
+    }
+    time_t reference_mobaku_time = mktime(&reference_time_tm);
+
+    if (reference_mobaku_time == (time_t)-1) {
+        fprintf(stderr, "Failed to create reference time\n");
+        return -1;
+    }
+
+    struct tm now_time_tm = {0};
+    if (strptime(now_time_str, "%Y-%m-%d %H:%M:%S", &now_time_tm) == NULL) {
+        fprintf(stderr, "Failed to parse now datetime_str\n");
+        return -1;
+    }
+
+    time_t now_time = mktime(&now_time_tm);
+    if (now_time == (time_t)-1) {
+        fprintf(stderr, "Failed to create now time\n");
+        return -1;
+    }
+
+    int index_h_time = (int)(difftime(now_time, reference_mobaku_time) / 3600.0);
+    if (index_h_time < 0) {
+        index_h_time = -1;
+    }
+    return index_h_time;
+}
+
 void uint2str(unsigned int num, char *str) {
     int i = 0;
 

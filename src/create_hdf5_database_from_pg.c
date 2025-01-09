@@ -15,9 +15,8 @@
 #include "meshid_ops.h"
 #include "fifioq.h"
 
-#define NUM_PRODUCERS 2
+#define NUM_PRODUCERS 32
 #define NUM_ITEMS_PER_PRODUCER 30
-#define QUEUE_SIZE 100
 #define MESHLIST_ONCE_LEN 16
 
 typedef struct {
@@ -57,37 +56,96 @@ void *producer(void *arg) {
     if (PQstatus(conn) != CONNECTION_OK) {
         fprintf(stderr, "Connection to database failed: %s\n", PQerrorMessage(conn));
         PQfinish(conn);
-        pthread_exit(NULL); // スレッド終了
+        pthread_exit(NULL);
     }
     FIFOQueue *data_queue = obj->DataQueue;
-    FIFOQueue * meshlist_queue = obj->MeshlistQueue;
+    FIFOQueue *meshlist_queue = obj->MeshlistQueue;
 
     while (true) {
-        MeshidList *meshid_list = dequeue(meshlist_queue);
-        if (meshid_list == nullptr) {
+        MeshidList *meshid_list = (MeshidList*)dequeue(meshlist_queue);
+        if (meshid_list == NULL) {
             break;
         }
+
+        // mesh_idリストを文字列に展開
+        char mesh_ids_str[4096] = ""; // 十分なバッファを確保
+        for (int i = 0; i < meshid_list->meshid_number; i++) {
+            char temp[32];
+            snprintf(temp, sizeof(temp), "%u", meshid_list->meshid_list[i]);
+            strcat(mesh_ids_str, temp);
+            if (i < meshid_list->meshid_number - 1) {
+                strcat(mesh_ids_str, ",");
+            }
+        }
+
+        char query[4096]; // 十分なバッファを確保
+        snprintf(query, sizeof(query), "SELECT * FROM population_00000 WHERE mesh_id = ANY(ARRAY[%s]) ORDER BY datetime", mesh_ids_str);
+
+        PGresult *res = PQexec(conn, query);
+
+        int num_rows = PQntuples(res);
+        int num_fields = PQnfields(res);
+
+        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+            fprintf(stderr, "SELECT failed: %s\n", PQerrorMessage(conn));
+            PQclear(res);
+            free_meshid_list(meshid_list);
+            continue;
+        }
+
         PQdataMatrix *m = (PQdataMatrix *)malloc(sizeof(PQdataMatrix));
-        m->rows = 100;
-        m->cols = meshid_list->meshid_number;
+        m->rows = num_rows;
+        m->cols = meshid_list->meshid_number; // 取得するデータ数（mesh_idの数）
         m->data = (int *)malloc(sizeof(int) * m->rows * m->cols);
         if (m->data == NULL) {
             perror("malloc failed");
             exit(1);
         }
-        char query[256];
-        snprintf(query, sizeof(query), "SELECT * FROM population_00000 WHERE mesh_id = %d ORDER BY datetime", meshid_list->meshid_number);
-        //todo
-        PGresult *res = PQexec(conn, query);
-        for (int j = 0; j < m->rows; j++) {
-            for (int k = 0; k < m->cols; k++) {
-                m->data[j * m->cols + k] = 1234;
+        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
+            fprintf(stderr, "SELECT failed: %s\n", PQerrorMessage(conn));
+            PQclear(res);
+            free(m->data);
+            free(m);
+            free_meshid_list(meshid_list);
+            continue;
+        }
+
+        int data_index = 0;
+
+        for (int j = 0; j < num_rows && j < m->rows; j++) {
+            for(int mesh_index = 0; mesh_index < meshid_list->meshid_number; mesh_index++){
+                bool found = false;
+                for(int k = 0; k < num_fields; k++){
+                    if(strcmp(PQfname(res, k), "mesh_id") == 0){
+                        char *mesh_id_val = PQgetvalue(res, j, k);
+                        if(mesh_id_val != NULL && atoi(mesh_id_val) == meshid_list->meshid_list[mesh_index]){
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+                if(found){
+                  for(int k = 0; k < num_fields; k++){
+                    if(strcmp(PQfname(res, k), "datetime") == 0){
+                        char *value = PQgetvalue(res, j, k);
+                        if (value != NULL) {
+                            m->data[j * m->cols + mesh_index] = atoi(value);
+                        } else {
+                            m->data[j * m->cols + mesh_index] = 0;
+                        }
+                        break;
+                    }
+                  }
+                } else{
+                    m->data[j * m->cols + mesh_index] = 0;
+                }
             }
         }
+        PQclear(res);
         enqueue(data_queue, m);
         free_meshid_list(meshid_list);
     }
-    enqueue(data_queue, nullptr);
+    enqueue(data_queue, NULL);
     PQfinish(conn);
     pthread_exit(NULL);
 }

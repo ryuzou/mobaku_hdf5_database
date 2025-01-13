@@ -1,3 +1,7 @@
+//
+// Created by ryuzot on 25/01/06.
+//
+
 #include <assert.h>
 #include <stdio.h>
 #include <libpq-fe.h>
@@ -7,6 +11,8 @@
 #include <time.h>
 #include <semaphore.h>
 #include <stdint.h>
+#include <arpa/inet.h>
+#include <endian.h>
 
 #include "env_reader.h"
 #include "db_credentials.h"
@@ -16,6 +22,8 @@
 #define NUM_PRODUCERS 32
 #define NUM_ITEMS_PER_PRODUCER 30
 #define MESHLIST_ONCE_LEN 16
+
+#define NOW_ENTIRE_LEN_FOR_ONE_MESH 74160
 
 typedef struct {
     int rows;
@@ -59,6 +67,8 @@ void *producer(void *arg) {
     FIFOQueue *data_queue = obj->DataQueue;
     FIFOQueue *meshlist_queue = obj->MeshlistQueue;
 
+    static const int64_t POSTGRES_EPOCH_IN_UNIX = 946684800LL;
+
     while (true) {
         MeshidList *meshid_list = (MeshidList*)dequeue(meshlist_queue);
         if (meshid_list == NULL) {
@@ -79,7 +89,16 @@ void *producer(void *arg) {
         char query[4096]; // 十分なバッファを確保
         snprintf(query, sizeof(query), "SELECT * FROM population_00000 WHERE mesh_id = ANY(ARRAY[%s]) ORDER BY datetime", mesh_ids_str);
 
-        PGresult *res = PQexec(conn, query);
+        PGresult *res = PQexecParams(
+            conn,
+            query,
+            0,       // nParams=0 (パラメータなし)
+            NULL,    // paramTypes
+            NULL,    // paramValues
+            NULL,    // paramLengths
+            NULL,    // paramFormats
+            1        // resultFormat = 1 => バイナリ
+    );
 
         int num_rows = PQntuples(res);
         int num_fields = PQnfields(res);
@@ -91,83 +110,65 @@ void *producer(void *arg) {
             continue;
         }
 
-        PQdataMatrix *m = (PQdataMatrix *)malloc(sizeof(PQdataMatrix));
-        m->rows = num_rows;
-        m->cols = meshid_list->meshid_number; // 取得するデータ数（mesh_idの数）
-        m->data = (int *)malloc(sizeof(int) * m->rows * m->cols);
-        if (m->data == NULL) {
+        PQdataMatrix *qdata_matrix = (PQdataMatrix *)malloc(sizeof(PQdataMatrix));
+        qdata_matrix->rows = NOW_ENTIRE_LEN_FOR_ONE_MESH;
+        qdata_matrix->cols = meshid_list->meshid_number; // 取得するデータ数（mesh_idの数）
+        qdata_matrix->data = (int *)malloc(sizeof(int) * qdata_matrix->rows * qdata_matrix->cols);
+        memset(qdata_matrix->data, (uint32_t)0, sizeof(uint32_t) * qdata_matrix->rows * qdata_matrix->cols);
+        if (qdata_matrix->data == NULL) {
             perror("malloc failed");
             exit(1);
         }
-        if (PQresultStatus(res) != PGRES_TUPLES_OK) {
-            fprintf(stderr, "SELECT failed: %s\n", PQerrorMessage(conn));
-            PQclear(res);
-            free(m->data);
-            free(m);
-            free_meshid_list(meshid_list);
-            continue;
-        }
 
-        int data_index = 0;
-        int pq_meshid_key = -1;
-        int pq_datetime_key = -1;
-        int pq_population_key = -1;
+        int idx_mesh = -1;
+        int idx_datetime = -1;
+        int idx_population = -1;
         for (int k = 0; k < num_fields; k++) {
             const char* fieldName = PQfname(res, k);
             if (strcmp(fieldName, "mesh_id") == 0) {
-                pq_meshid_key = k;
+                idx_mesh = k;
             } else if (strcmp(fieldName, "datetime") == 0) {
-                pq_datetime_key = k;
+                idx_datetime = k;
             } else if (strcmp(fieldName, "population") == 0) {
-                pq_population_key = k;
+                idx_population = k;
             }
         }
-        if (pq_meshid_key == -1 || pq_datetime_key == -1 || pq_population_key == -1) {
+        if (idx_mesh == -1 || idx_datetime == -1 || idx_population == -1) {
             fprintf(stderr, "KEY ERROR");
             PQclear(res);
-            free(m->data);
-            free(m);
+            free(qdata_matrix->data);
+            free(qdata_matrix);
             free_meshid_list(meshid_list);
             continue;
         }
 
-        for (int j = 0; j < num_rows && j < m->rows; j++) {
-            char *datetime_value = PQgetvalue(res, j, pq_datetime_key);
-            int time_index = get_time_index_mobaku_datetime(datetime_value);
+        cmph_t *local_hash = create_local_mph_from_int(meshid_list->meshid_list, meshid_list->meshid_number);
 
-            // for(int mesh_index = 0; mesh_index < meshid_list->meshid_number; mesh_index++){
-            //     bool found = false;
-            //     for(int k = 0; k < num_fields; k++){
-            //         if(strcmp(PQfname(res, k), "mesh_id") == 0){
-            //             char *mesh_id_val = PQgetvalue(res, j, k);
-            //             if(mesh_id_val != NULL && atoi(mesh_id_val) == meshid_list->meshid_list[mesh_index]){
-            //                 found = true;
-            //                 break;
-            //             }
-            //         }
-            //     }
-            //     if(found){
-            //       for(int k = 0; k < num_fields; k++){
-            //         if(strcmp(PQfname(res, k), "datetime") == 0){
-            //             char *value = PQgetvalue(res, j, k);
-            //             if (value != NULL) {
-            //                 m->data[j * m->cols + mesh_index] = atoi(value);
-            //             } else {
-            //                 m->data[j * m->cols + mesh_index] = 0;
-            //             }
-            //             break;
-            //         }
-            //       }
-            //     } else{
-            //         m->data[j * m->cols + mesh_index] = 0;
-            //     }
-            // }
+        for (int j = 0; j < num_rows && j < qdata_matrix->rows; j++) {
+            int32_t mesh_id_netorder;
+            memcpy(&mesh_id_netorder, PQgetvalue(res, j, idx_mesh), sizeof(int32_t));
+            int meshid_value = (int)ntohl(mesh_id_netorder);
+
+            int32_t pop_netorder;
+            memcpy(&pop_netorder, PQgetvalue(res, j, idx_population), sizeof(int32_t));
+            int population = (int)ntohl(pop_netorder);
+
+
+            char *datetime_binary_ptr = PQgetvalue(res, j, idx_datetime);
+            int datetime_binary_len = PQgetlength(res, j, idx_datetime);
+
+            time_t datetime_binary_jst = pg_bin_timestamp_to_jst(datetime_binary_ptr, datetime_binary_len);
+
+            int time_index = get_time_index_mobaku_datetime_from_time(datetime_binary_jst);
+            int meshid_index = find_local_id(local_hash, meshid_value);
+            qdata_matrix->data[time_index * qdata_matrix->cols + meshid_index] = population;    //row-major
         }
+        cmph_destroy(local_hash);
         PQclear(res);
-        enqueue(data_queue, m);
+        enqueue(data_queue, qdata_matrix);
         free_meshid_list(meshid_list);
     }
-    enqueue(data_queue, NULL);
+    enqueue(data_queue, nullptr);
     PQfinish(conn);
     pthread_exit(NULL);
 }
@@ -184,7 +185,7 @@ void *consumer(void *arg) {
             }
             continue;
         }
-        printf("Consumed matrix (rows: %d, cols: %d)\n",m->rows, m->cols);
+        //printf("Consumed matrix (rows: %d, cols: %d)\n",m->rows, m->cols);
         free_pqdata_matrix(m);
     }
     pthread_exit(NULL);
@@ -202,10 +203,7 @@ void *meshlist_producer(void *arg) {
         }
         m->meshid_list = meshid_once_list;
         enqueue(meshid_queue, m);
-
-        printf("Progress: %d / %lu\n",
-               i * MESHLIST_ONCE_LEN,
-               meshid_list_size);
+        printProgressBar(i * MESHLIST_ONCE_LEN, meshid_list_size);
     }
     if (meshid_list_size % MESHLIST_ONCE_LEN != 0) {
         uint32_t *meshid_once_list = (int *)malloc((meshid_list_size % MESHLIST_ONCE_LEN) * sizeof(uint32_t));
@@ -217,6 +215,7 @@ void *meshlist_producer(void *arg) {
         m->meshid_list = meshid_once_list;
         enqueue(meshid_queue, m);
     }
+    printf("\n");
     for (int k = 0; k < NUM_PRODUCERS; ++k) {
         enqueue(meshid_queue, nullptr);
     }

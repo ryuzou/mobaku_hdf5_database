@@ -63,7 +63,8 @@ int main() {
         {"invalid time string", -1, "不正な日付文字列"},
         {"2016-01-01 25:00:0", -1, "不正な日付文字列"},
         {"2016-01-01 -1:00:00", -1, "不正な日付文字列"},
-        {"2016/01/01 01:00:00", -1, "不正な日付文字列(区切り文字不正)"}
+        {"2016/01/01 01:00:00", -1, "不正な日付文字列(区切り文字不正)"},
+        {"2024-06-16 23:00:00", 74160-1, "最後"}
     };
 
     int num_test_cases = sizeof(test_cases) / sizeof(TestCase);
@@ -86,11 +87,14 @@ int main() {
         assert(index == i);
         printf("my_list[%zu] (%d) index: %d\n", i, key, index);
     }
+    cmph_destroy(local_hash);
     end_time = clock();
     time_taken = (double)(end_time - start_time) / CLOCKS_PER_SEC;
 
     printf("Time taken for little hash search %f seconds\n", time_taken);
     printf("Little local hash test passed\n");
+
+
 
 
     printf("All tests passed!\n");

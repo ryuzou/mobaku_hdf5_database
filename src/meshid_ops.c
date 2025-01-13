@@ -6,6 +6,23 @@
 
 #include <assert.h>
 
+time_t pg_bin_timestamp_to_jst(const char *bin_ptr, int len) {
+    if (len < 8) {
+        return (time_t)-1;
+    }
+
+    int64_t network_order_64 = 0;
+    memcpy(&network_order_64, bin_ptr, 8);
+    int64_t pg_microsec = (int64_t)be64toh((uint64_t)network_order_64);
+
+    int64_t pg_sec  = pg_microsec / 1000000;
+    int64_t utc_sec = pg_sec + POSTGRES_EPOCH_IN_UNIX;
+    // AWARE!!! HARD CODED!!!!
+    int64_t jst_sec = utc_sec - JST_OFFSET_SEC;
+
+    return (time_t)jst_sec;
+}
+
 int get_time_index_mobaku_datetime(char* now_time_str) {
     constexpr struct tm reference_time_tm = {0};
     if (strptime(REFERENCE_MOBAKU_DATETIME, "%Y-%m-%d %H:%M:%S", &reference_time_tm) == NULL) {
@@ -26,6 +43,31 @@ int get_time_index_mobaku_datetime(char* now_time_str) {
     }
 
     time_t now_time = mktime(&now_time_tm);
+    if (now_time == (time_t)-1) {
+        fprintf(stderr, "Failed to create now time\n");
+        return -1;
+    }
+
+    int index_h_time = (int)(difftime(now_time, reference_mobaku_time) / 3600.0);
+    if (index_h_time < 0) {
+        index_h_time = -1;
+    }
+    return index_h_time;
+}
+
+int get_time_index_mobaku_datetime_from_time(time_t now_time) {
+    constexpr struct tm reference_time_tm = {0};
+    if (strptime(REFERENCE_MOBAKU_DATETIME, "%Y-%m-%d %H:%M:%S", &reference_time_tm) == NULL) {
+        fprintf(stderr, "Failed to parse first datetime_str\n");
+        return -1;
+    }
+    time_t reference_mobaku_time = mktime(&reference_time_tm);
+
+    if (reference_mobaku_time == (time_t)-1) {
+        fprintf(stderr, "Failed to create reference time\n");
+        return -1;
+    }
+
     if (now_time == (time_t)-1) {
         fprintf(stderr, "Failed to create now time\n");
         return -1;
@@ -142,4 +184,23 @@ int find_local_id(cmph_t *hash, uint32_t key) {
     char key_str[11];
     uint2str(key, key_str);
     return cmph_search(hash, key_str, (cmph_uint32)strlen(key_str));
+}
+
+void printProgressBar(int now, int all) {
+    const int barWidth = 200;
+
+    double progress = (double)(now) / (double)all;
+    int pos = (int)(barWidth * progress);
+
+    // 行頭に戻る(\r)ことで同じ行を上書き
+    printf("\r[");
+    for (int i = 0; i < barWidth; ++i) {
+        if (i < pos) {
+            printf("=");
+        } else {
+            printf(" ");
+        }
+    }
+    printf("] %6.2f %%  %d/%d", progress * 100.0, now, all);
+    fflush(stdout);
 }

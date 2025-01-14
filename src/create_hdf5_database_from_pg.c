@@ -159,7 +159,7 @@ void *producer(void *arg) {
 
         cmph_t *local_hash = create_local_mph_from_int(meshid_list->meshid_list, meshid_list->meshid_number);
 
-        for (int j = 0; j < num_rows && j < qdata_matrix->rows; j++) {
+        for (int j = 0; j < num_rows; j++) {
             int32_t meshid_value = ntohl(*((int32_t *)PQgetvalue(res, j, idx_mesh)));
             int32_t population = ntohl(*((int32_t *)PQgetvalue(res, j, idx_population)));
 

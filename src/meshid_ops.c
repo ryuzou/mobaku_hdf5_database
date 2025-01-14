@@ -187,7 +187,7 @@ int find_local_id(cmph_t *hash, uint32_t key) {
 }
 
 void printProgressBar(int now, int all) {
-    const int barWidth = 200;
+    const int barWidth = 50;
 
     double progress = (double)(now) / (double)all;
     int pos = (int)(barWidth * progress);

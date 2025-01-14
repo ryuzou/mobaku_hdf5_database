@@ -1,13 +1,15 @@
 //
 // Created by ryuzot on 25/01/06.
 //
-
+#define _GNU_SOURCE
+#include <pthread.h>
+#include <sched.h>
+#include <unistd.h>
 #include <assert.h>
 #include <stdio.h>
 #include <libpq-fe.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
 #include <time.h>
 #include <semaphore.h>
 #include <stdint.h>
@@ -186,6 +188,7 @@ void *consumer(void *arg) {
             continue;
         }
         //printf("Consumed matrix (rows: %d, cols: %d)\n",m->rows, m->cols);
+
         free_pqdata_matrix(m);
     }
     pthread_exit(NULL);
@@ -223,8 +226,8 @@ void *meshlist_producer(void *arg) {
     pthread_exit(NULL);
 }
 
-
 int main(int argc, char* argv[]) {
+    int cpulist[] = {0,1,2,3,4,5,6,7,16,17,18,19,20,21,22,23};  //HARDCODEING AWARE!!!
     const char* env_filepath = ".env";
     if (argc > 1) {
         env_filepath = argv[1];
@@ -250,20 +253,56 @@ int main(int argc, char* argv[]) {
     init_queue(&data_queue);
     init_queue(&meshid_queue);
 
-
+    pthread_attr_t attr;
+    cpu_set_t cpuset;
     pthread_t producer_threads[NUM_PRODUCERS], consumer_thread, meshlist_producer_pthread;
-
     ProducerObject producer_objects[NUM_PRODUCERS];
+    int target_cpu_core;
 
-    pthread_create(&meshlist_producer_pthread, NULL, meshlist_producer, &meshid_queue);
-    for (int i = 0; i < NUM_PRODUCERS; i++) {
+    // meshlist_producer スレッドの作成と affinity 設定
+    pthread_attr_init(&attr);
+    CPU_ZERO(&cpuset);
+    CPU_SET(0, &cpuset);    //HARDCODE AWARE!!!
+    if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset) != 0) {
+        perror("pthread_attr_setaffinity_np failed for meshlist_producer");
+    }
+    if (pthread_create(&meshlist_producer_pthread, &attr, meshlist_producer, &meshid_queue) != 0) {
+        perror("pthread_create failed for meshlist_producer");
+        return 1;
+    }
+    pthread_attr_destroy(&attr);
+
+    // producer スレッドの作成と affinity 設定
+    for (int i = 0; i < NUM_PRODUCERS; ++i) {
+        pthread_attr_init(&attr);
+        CPU_ZERO(&cpuset);
+        target_cpu_core = cpulist[i % (sizeof(cpulist) / sizeof(cpulist[0]))];    //HARDCODE AWARE!!!
+        CPU_SET(target_cpu_core, &cpuset);
+        if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset) != 0) {
+            perror("pthread_attr_setaffinity_np failed for producer");
+        }
         producer_objects[i].DataQueue = &data_queue;
         producer_objects[i].MeshlistQueue = &meshid_queue;
         producer_objects[i].conninfo = conninfo;
-        pthread_create(&producer_threads[i], NULL, producer, &producer_objects[i]);
+        if (pthread_create(&producer_threads[i], &attr, producer, &producer_objects[i]) != 0) {
+            perror("pthread_create failed for producer");
+            return 1;
+        }
+        pthread_attr_destroy(&attr);
     }
 
-    pthread_create(&consumer_thread, NULL, consumer, &data_queue);
+    // consumer スレッドの作成と affinity 設定
+    pthread_attr_init(&attr);
+    CPU_ZERO(&cpuset);
+    CPU_SET(1, &cpuset);    //HARDCODE AWARE!!!
+    if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset) != 0) {
+        perror("pthread_attr_setaffinity_np failed for consumer");
+    }
+    if (pthread_create(&consumer_thread, &attr, consumer, &data_queue) != 0) {
+        perror("pthread_create failed for consumer");
+        return 1;
+    }
+    pthread_attr_destroy(&attr);
 
     pthread_join(meshlist_producer_pthread, NULL);
 

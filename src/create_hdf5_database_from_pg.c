@@ -30,6 +30,13 @@
 #define HDF5_DATETIME_CHUNK 8760 //365 * 24
 #define HDF5_MESH_CHUNK 16
 
+// テスト用縮小データセット作成を有効にする場合はdefineを有効にする
+#define CREATE_SMALL_DATASET
+
+#ifdef CREATE_SMALL_DATASET
+#define DATASET_REDUCTION_FACTOR 70
+#endif
+
 typedef struct {
     int rows;
     int cols;
@@ -179,6 +186,7 @@ typedef struct {
     FIFOQueue *queue;
     hid_t hdf5_file_id;
     cmph_t *global_hash;
+    int total_meshes;
 } ConsumerArgs;
 
 void *consumer(void *consumer_args) {
@@ -199,12 +207,24 @@ void *consumer(void *consumer_args) {
     hsize_t chunk_dims[2] = {HDF5_DATETIME_CHUNK, HDF5_MESH_CHUNK};
     H5Pset_chunk(plist_id, 2, chunk_dims);
     hid_t dataset_id = H5Dcreate(file_id, "population_data", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, plist_id, H5P_DEFAULT);
+    int fill_value = 0;
+    herr_t status_fill = H5Pset_fill_value(plist_id, H5T_NATIVE_INT, &fill_value);
+    if (status_fill < 0) {
+        fprintf(stderr, "Failed to set fill value for HDF5 dataset\n");
+        H5Pclose(plist_id);
+        H5Sclose(dataspace_id);
+        H5Fclose(file_id);
+        pthread_exit(NULL);
+    }
     H5Pclose(plist_id);
     if (dataset_id < 0) {
         fprintf(stderr, "Failed to create dataset in consumer\n");
         H5Sclose(dataspace_id);
         pthread_exit(NULL);
     }
+
+    int processed_meshes = 0; // プログレスバー用カウンタ (処理済みメッシュ数)
+    int total_meshes = args->total_meshes; // プログレスバー用合計メッシュ数
 
     while (true) {
         PQdataMatrix *m = dequeue(q);
@@ -216,7 +236,8 @@ void *consumer(void *consumer_args) {
             continue;
         }
 
-        // データセットに書き込むための設定
+        processed_meshes += m->cols;
+        printProgressBar(processed_meshes, total_meshes);
         hsize_t offset[2];
         hsize_t count[2];
 
@@ -240,6 +261,8 @@ void *consumer(void *consumer_args) {
         free_pqdata_matrix(m);
     }
 
+    printf("\n"); // プログレスバー改行
+
     // HDF5 リソースをクローズ
     H5Dclose(dataset_id);
     H5Sclose(dataspace_id);
@@ -251,7 +274,13 @@ void *consumer(void *consumer_args) {
 void *meshlist_producer(void *arg) {
     FIFOQueue *meshid_queue = (FIFOQueue *)arg;
     int i;
-    for (i = 0; i < (int)(meshid_list_size / MESHLIST_ONCE_LEN); ++i) {
+    int mesh_count = meshid_list_size;
+    #ifdef CREATE_SMALL_DATASET
+    mesh_count = meshid_list_size / DATASET_REDUCTION_FACTOR;
+    if (mesh_count == 0) mesh_count = 1; // 少なくとも1つは処理する
+    #endif
+
+    for (i = 0; i < (int)(mesh_count / MESHLIST_ONCE_LEN); ++i) {
         uint32_t *meshid_once_list = (uint32_t *)malloc(MESHLIST_ONCE_LEN * sizeof(uint32_t));
         MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
         m->meshid_number = MESHLIST_ONCE_LEN;
@@ -260,13 +289,12 @@ void *meshlist_producer(void *arg) {
         }
         m->meshid_list = meshid_once_list;
         enqueue(meshid_queue, m);
-        printProgressBar(i * MESHLIST_ONCE_LEN, meshid_list_size);
     }
-    if (meshid_list_size % MESHLIST_ONCE_LEN != 0) {
-        uint32_t *meshid_once_list = (uint32_t *)malloc((meshid_list_size % MESHLIST_ONCE_LEN) * sizeof(uint32_t));
+    if (mesh_count % MESHLIST_ONCE_LEN != 0) {
+        uint32_t *meshid_once_list = (uint32_t *)malloc((mesh_count % MESHLIST_ONCE_LEN) * sizeof(uint32_t));
         MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
-        m->meshid_number = (meshid_list_size % MESHLIST_ONCE_LEN);
-        for (int j = 0; j < meshid_list_size % MESHLIST_ONCE_LEN; ++j) {
+        m->meshid_number = (mesh_count % MESHLIST_ONCE_LEN);
+        for (int j = 0; j < mesh_count % MESHLIST_ONCE_LEN; ++j) {
             meshid_once_list[j] = meshid_list[i * MESHLIST_ONCE_LEN + j];
         }
         m->meshid_list = meshid_once_list;
@@ -393,10 +421,19 @@ int main(int argc, char* argv[]) {
     if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset) != 0) {
         perror("pthread_attr_setaffinity_np failed for consumer");
     }
+
+    int mesh_count = meshid_list_size;
+#ifdef CREATE_SMALL_DATASET
+    mesh_count = meshid_list_size / DATASET_REDUCTION_FACTOR;
+    if (mesh_count == 0) mesh_count = 1; // 少なくとも1つは処理する
+    printf("テスト用データセット作成: 元データセットの1/%dを使用します (mesh数: %d)\n", DATASET_REDUCTION_FACTOR, mesh_count);
+#endif
+
     ConsumerArgs consumer_args;
     consumer_args.queue = &data_queue;
     consumer_args.hdf5_file_id = file_id;
     consumer_args.global_hash = prepare_search();
+    consumer_args.total_meshes = mesh_count;
     if (pthread_create(&consumer_thread, &attr, consumer, &consumer_args) != 0) {
         perror("pthread_create failed for consumer");
         // HDF5 ファイルをクローズ (エラー処理)

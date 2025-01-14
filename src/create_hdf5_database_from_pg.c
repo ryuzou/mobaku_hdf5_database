@@ -16,6 +16,8 @@
 #include <arpa/inet.h>
 #include <endian.h>
 
+#include <hdf5.h>
+
 #include "env_reader.h"
 #include "db_credentials.h"
 #include "meshid_ops.h"
@@ -25,6 +27,8 @@
 #define MESHLIST_ONCE_LEN 16
 
 #define NOW_ENTIRE_LEN_FOR_ONE_MESH 74160
+#define HDF5_DATETIME_CHUNK 8760 //365 * 24
+#define HDF5_MESH_CHUNK 16
 
 typedef struct {
     int rows;
@@ -37,7 +41,6 @@ typedef struct {
     int meshid_number;
     uint32_t *meshid_list;
 } MeshidList;
-
 
 typedef struct {
     FIFOQueue *DataQueue;
@@ -171,35 +174,77 @@ void *producer(void *arg) {
     PQfinish(conn);
     pthread_exit(NULL);
 }
-void *consumer(void *arg) {
-    cmph_t *hash = prepare_search();
-    FIFOQueue *q = (FIFOQueue *)arg;
+
+typedef struct {
+    FIFOQueue *queue;
+    hid_t hdf5_file_id;
+    cmph_t *global_hash;
+} ConsumerArgs;
+
+void *consumer(void *consumer_args) {
+    ConsumerArgs *args = (ConsumerArgs *)consumer_args;
+    FIFOQueue *q = args->queue;
+    hid_t file_id = args->hdf5_file_id;
+    cmph_t *hash_for_all_mesh = args->global_hash;
     int nulp_counter = 0;
+
+    // データセットの作成準備
+    hsize_t dims[2] = {NOW_ENTIRE_LEN_FOR_ONE_MESH, meshid_list_size};
+    hid_t dataspace_id = H5Screate_simple(2, dims, NULL);
+    if (dataspace_id < 0) {
+        fprintf(stderr, "Failed to create dataspace in consumer\n");
+        pthread_exit(NULL);
+    }
+    hid_t plist_id = H5Pcreate(H5P_DATASET_CREATE);
+    hsize_t chunk_dims[2] = {HDF5_DATETIME_CHUNK, HDF5_MESH_CHUNK};
+    H5Pset_chunk(plist_id, 2, chunk_dims);
+    hid_t dataset_id = H5Dcreate(file_id, "population_data", H5T_NATIVE_INT, dataspace_id, H5P_DEFAULT, plist_id, H5P_DEFAULT);
+    H5Pclose(plist_id);
+    if (dataset_id < 0) {
+        fprintf(stderr, "Failed to create dataset in consumer\n");
+        H5Sclose(dataspace_id);
+        pthread_exit(NULL);
+    }
+
     while (true) {
         PQdataMatrix *m = dequeue(q);
-        if (m == nullptr) {
+        if (m == NULL) {
             nulp_counter++;
             if (nulp_counter == NUM_PRODUCERS) {
                 break;
             }
             continue;
         }
-        uint32_t id_base = m->meshid_start;
-        int col_num = m->cols;
-        for (int i = 0; i < m->rows; ++i) {
-            char* datetime_str = get_mobaku_datetime_from_time_index(i);
-            for (int j = 0; j < m->cols; ++j) {
-                if (m->data[i * m->cols + j] != 0) {
-                    if (i == 0) {
-                        printf("timeindex: %d   meshid: %u    population: %d    datetime: %s\n", i, id_base + j, m->data[i * m->cols + j], datetime_str);
-                    }
-                }
-            }
-            free(datetime_str); // メモリ解放
+
+        // データセットに書き込むための設定
+        hsize_t offset[2];
+        hsize_t count[2];
+
+        offset[0] = 0; // 常に先頭から
+        offset[1] = find_local_id(hash_for_all_mesh, m->meshid_start); // 書き込み開始のメッシュID
+
+        count[0] = m->rows;
+        count[1] = m->cols;
+
+        hid_t memspace_id = H5Screate_simple(2, count, NULL);
+        hid_t dataset_space_id = H5Dget_space(dataset_id);
+        H5Sselect_hyperslab(dataset_space_id, H5S_SELECT_SET, offset, NULL, count, NULL);
+
+        herr_t status = H5Dwrite(dataset_id, H5T_NATIVE_INT, memspace_id, dataset_space_id, H5P_DEFAULT, m->data);
+        if (status < 0) {
+            fprintf(stderr, "Failed to write data to HDF5 dataset\n");
         }
 
+        H5Sclose(memspace_id);
+        H5Sclose(dataset_space_id);
         free_pqdata_matrix(m);
     }
+
+    // HDF5 リソースをクローズ
+    H5Dclose(dataset_id);
+    H5Sclose(dataspace_id);
+    H5Fclose(file_id);
+
     pthread_exit(NULL);
 }
 
@@ -207,7 +252,7 @@ void *meshlist_producer(void *arg) {
     FIFOQueue *meshid_queue = (FIFOQueue *)arg;
     int i;
     for (i = 0; i < (int)(meshid_list_size / MESHLIST_ONCE_LEN); ++i) {
-        uint32_t *meshid_once_list = (int *)malloc(MESHLIST_ONCE_LEN * sizeof(uint32_t));
+        uint32_t *meshid_once_list = (uint32_t *)malloc(MESHLIST_ONCE_LEN * sizeof(uint32_t));
         MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
         m->meshid_number = MESHLIST_ONCE_LEN;
         for (int j = 0; j < MESHLIST_ONCE_LEN; ++j) {
@@ -218,7 +263,7 @@ void *meshlist_producer(void *arg) {
         printProgressBar(i * MESHLIST_ONCE_LEN, meshid_list_size);
     }
     if (meshid_list_size % MESHLIST_ONCE_LEN != 0) {
-        uint32_t *meshid_once_list = (int *)malloc((meshid_list_size % MESHLIST_ONCE_LEN) * sizeof(uint32_t));
+        uint32_t *meshid_once_list = (uint32_t *)malloc((meshid_list_size % MESHLIST_ONCE_LEN) * sizeof(uint32_t));
         MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
         m->meshid_number = (meshid_list_size % MESHLIST_ONCE_LEN);
         for (int j = 0; j < meshid_list_size % MESHLIST_ONCE_LEN; ++j) {
@@ -261,6 +306,47 @@ int main(int argc, char* argv[]) {
     FIFOQueue meshid_queue;
     init_queue(&data_queue);
     init_queue(&meshid_queue);
+
+    // HDF5 ファイルを作成
+    const char* hdf5_filepath = getenv("HDF5_FILE_PATH");
+    if (hdf5_filepath == NULL) {
+        fprintf(stderr, "HDF5_FILE_PATH environment variable not set.\n");
+        return 1;
+    }
+    hid_t file_id = H5Fcreate(hdf5_filepath, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+    if (file_id < 0) {
+        fprintf(stderr, "Failed to create HDF5 file: %s\n", hdf5_filepath);
+        return 1;
+    }
+
+    // meshid_list メタデータの書き込み
+    hsize_t meshid_list_dims[1] = {meshid_list_size};
+    hid_t meshid_list_space_id = H5Screate_simple(1, meshid_list_dims, NULL);
+    hid_t meshid_list_dataset_id = H5Dcreate(file_id, "meshid_list", H5T_NATIVE_UINT32, meshid_list_space_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    if (meshid_list_dataset_id < 0) {
+        fprintf(stderr, "Failed to create meshid_list dataset\n");
+        H5Sclose(meshid_list_space_id);
+        H5Fclose(file_id);
+        return 1;
+    }
+    H5Dwrite(meshid_list_dataset_id, H5T_NATIVE_UINT32, H5S_ALL, H5S_ALL, H5P_DEFAULT, meshid_list);
+    H5Dclose(meshid_list_dataset_id);
+    H5Sclose(meshid_list_space_id);
+
+    // cmph データの書き込み
+    size_t mph_size = (size_t)(_binary_meshid_mobaku_mph_end - _binary_meshid_mobaku_mph_start);
+    hsize_t cmph_dims[1] = {mph_size};
+    hid_t cmph_space_id = H5Screate_simple(1, cmph_dims, NULL);
+    hid_t cmph_dataset_id = H5Dcreate(file_id, "cmph_data", H5T_NATIVE_UINT8, cmph_space_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    if (cmph_dataset_id < 0) {
+        fprintf(stderr, "Failed to create cmph_data dataset\n");
+        H5Sclose(cmph_space_id);
+        H5Fclose(file_id);
+        return 1;
+    }
+    H5Dwrite(cmph_dataset_id, H5T_NATIVE_UINT8, H5S_ALL, H5S_ALL, H5P_DEFAULT, _binary_meshid_mobaku_mph_start);
+    H5Dclose(cmph_dataset_id);
+    H5Sclose(cmph_space_id);
 
     pthread_attr_t attr;
     cpu_set_t cpuset;
@@ -307,8 +393,14 @@ int main(int argc, char* argv[]) {
     if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset) != 0) {
         perror("pthread_attr_setaffinity_np failed for consumer");
     }
-    if (pthread_create(&consumer_thread, &attr, consumer, &data_queue) != 0) {
+    ConsumerArgs consumer_args;
+    consumer_args.queue = &data_queue;
+    consumer_args.hdf5_file_id = file_id;
+    consumer_args.global_hash = prepare_search();
+    if (pthread_create(&consumer_thread, &attr, consumer, &consumer_args) != 0) {
         perror("pthread_create failed for consumer");
+        // HDF5 ファイルをクローズ (エラー処理)
+        H5Fclose(file_id);
         return 1;
     }
     pthread_attr_destroy(&attr);

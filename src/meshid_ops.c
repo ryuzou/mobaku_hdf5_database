@@ -80,6 +80,39 @@ int get_time_index_mobaku_datetime_from_time(time_t now_time) {
     return index_h_time;
 }
 
+char * get_mobaku_datetime_from_time_index(int time_index) {
+    struct tm reference_time_tm = {0};
+    if (strptime(REFERENCE_MOBAKU_DATETIME, "%Y-%m-%d %H:%M:%S", &reference_time_tm) == NULL) {
+        fprintf(stderr, "Failed to parse reference datetime\n");
+        return NULL;
+    }
+    time_t reference_mobaku_time = mktime(&reference_time_tm);
+
+    if (reference_mobaku_time == (time_t)-1) {
+        fprintf(stderr, "Failed to create reference time\n");
+        return NULL;
+    }
+
+    time_t target_time = reference_mobaku_time + (time_index * 3600);
+
+    struct tm target_time_tm;
+    localtime_r(&target_time, &target_time_tm);
+
+    char* datetime_str = (char*)malloc(sizeof(char) * 20); // "YYYY-MM-DD HH:MM:SS\0"
+    if (datetime_str == NULL) {
+        perror("malloc failed");
+        return NULL;
+    }
+
+    if (strftime(datetime_str, 20, "%Y-%m-%d %H:%M:%S", &target_time_tm) == 0) {
+        fprintf(stderr, "Failed to format datetime\n");
+        free(datetime_str);
+        return NULL;
+    }
+
+    return datetime_str;
+}
+
 void uint2str(unsigned int num, char *str) {
     int i = 0;
 

@@ -30,6 +30,7 @@ typedef struct {
     int rows;
     int cols;
     int *data;
+    int meshid_start;
 } PQdataMatrix;
 
 typedef struct {
@@ -117,6 +118,7 @@ void *producer(void *arg) {
         qdata_matrix->rows = NOW_ENTIRE_LEN_FOR_ONE_MESH;
         qdata_matrix->cols = meshid_list->meshid_number; // 取得するデータ数（mesh_idの数）
         qdata_matrix->data = (int *)malloc(sizeof(int) * qdata_matrix->rows * qdata_matrix->cols);
+        qdata_matrix->meshid_start = meshid_list->meshid_list[0];
         memset(qdata_matrix->data, 0, sizeof(int) * qdata_matrix->rows * qdata_matrix->cols);
         if (qdata_matrix->data == NULL) {
             perror("malloc failed");
@@ -148,13 +150,8 @@ void *producer(void *arg) {
         cmph_t *local_hash = create_local_mph_from_int(meshid_list->meshid_list, meshid_list->meshid_number);
 
         for (int j = 0; j < num_rows && j < qdata_matrix->rows; j++) {
-            int32_t mesh_id_netorder;
-            memcpy(&mesh_id_netorder, PQgetvalue(res, j, idx_mesh), sizeof(int32_t));
-            int meshid_value = ntohl(mesh_id_netorder);
-
-            int32_t pop_netorder;
-            memcpy(&pop_netorder, PQgetvalue(res, j, idx_population), sizeof(int32_t));
-            int population = ntohl(pop_netorder);
+            int32_t meshid_value = ntohl(*((int32_t *)PQgetvalue(res, j, idx_mesh)));
+            int32_t population = ntohl(*((int32_t *)PQgetvalue(res, j, idx_population)));
 
             char *datetime_binary_ptr = PQgetvalue(res, j, idx_datetime);
             int datetime_binary_len = PQgetlength(res, j, idx_datetime);
@@ -163,9 +160,7 @@ void *producer(void *arg) {
 
             int time_index = get_time_index_mobaku_datetime_from_time(datetime_binary_jst);
             int meshid_index = find_local_id(local_hash, meshid_value);
-            if (meshid_index >= 0 && meshid_index < qdata_matrix->cols && time_index >= 0 && time_index < qdata_matrix->rows) {
-                qdata_matrix->data[time_index * qdata_matrix->cols + meshid_index] = population;    //row-major
-            }
+            qdata_matrix->data[time_index * qdata_matrix->cols + meshid_index] = population;    //row-major
         }
         cmph_destroy(local_hash);
         PQclear(res);
@@ -177,6 +172,7 @@ void *producer(void *arg) {
     pthread_exit(NULL);
 }
 void *consumer(void *arg) {
+    cmph_t *hash = prepare_search();
     FIFOQueue *q = (FIFOQueue *)arg;
     int nulp_counter = 0;
     while (true) {
@@ -188,7 +184,19 @@ void *consumer(void *arg) {
             }
             continue;
         }
-        //printf("Consumed matrix (rows: %d, cols: %d)\n",m->rows, m->cols);
+        uint32_t id_base = m->meshid_start;
+        int col_num = m->cols;
+        for (int i = 0; i < m->rows; ++i) {
+            char* datetime_str = get_mobaku_datetime_from_time_index(i);
+            for (int j = 0; j < m->cols; ++j) {
+                if (m->data[i * m->cols + j] != 0) {
+                    if (i == 0) {
+                        printf("timeindex: %d   meshid: %u    population: %d    datetime: %s\n", i, id_base + j, m->data[i * m->cols + j], datetime_str);
+                    }
+                }
+            }
+            free(datetime_str); // メモリ解放
+        }
 
         free_pqdata_matrix(m);
     }

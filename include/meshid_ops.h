@@ -41,6 +41,8 @@ int get_time_index_mobaku_datetime(char *now_time_str);
 
 int get_time_index_mobaku_datetime_from_time(time_t now_time);
 
+char* get_mobaku_datetime_from_time_index(int time_index);
+
 void uint2str(unsigned int num, char *str);
 
 // 検索準備関数

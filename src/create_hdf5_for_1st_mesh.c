@@ -318,7 +318,13 @@ int main(int argc, char* argv[]) {
     if (argc > 1) {
         env_filepath = argv[1];
     }
-    int mesh1st = 5033;
+    int mesh1st;
+    if (argc > 2) {
+        mesh1st = atoi(argv[2]);
+    } else {
+        fprintf(stderr, "Usage: %s <env_file> <mesh1st> <output_file>\n", argv[0]);
+        return 1;
+    }
     int NUM_MESHES_1ST = 25600;
     int *all_meshes = get_all_meshes_in_1st_mesh(mesh1st, NUM_MESHES_1ST);
 
@@ -343,7 +349,13 @@ int main(int argc, char* argv[]) {
     init_queue(&meshid_queue);
 
     // HDF5 ファイルを作成
-    const char* hdf5_filepath = "/db1/h5/mesh1st_5033.h5";
+    const char* hdf5_filepath;
+    if (argc > 3) {
+        hdf5_filepath = argv[3];
+    } else {
+        fprintf(stderr, "Usage: %s <env_file> <mesh1st> <output_file>\n", argv[0]);
+        return 1;
+    }
     hid_t file_id = H5Fcreate(hdf5_filepath, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
     if (file_id < 0) {
         fprintf(stderr, "Failed to create HDF5 file: %s\n", hdf5_filepath);

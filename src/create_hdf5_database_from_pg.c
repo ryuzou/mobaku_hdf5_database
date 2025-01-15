@@ -31,7 +31,7 @@
 #define HDF5_MESH_CHUNK 16
 
 // テスト用縮小データセット作成を有効にする場合はdefineを有効にする
-#define CREATE_SMALL_DATASET
+//#define CREATE_SMALL_DATASET
 
 #ifdef CREATE_SMALL_DATASET
 #define DATASET_REDUCTION_FACTOR 70

@@ -35,6 +35,9 @@ static const int64_t POSTGRES_EPOCH_IN_UNIX = 946684800LL;
 // AWARE !!! HARD CODED !!!
 static const int64_t JST_OFFSET_SEC = 9 * 3600;
 
+const int NUM_MESHES_1ST = 25600;
+
+
 time_t pg_bin_timestamp_to_jst(const char *bin_ptr, int len);
 
 int get_time_index_mobaku_datetime(char *now_time_str);
@@ -62,5 +65,7 @@ cmph_t* create_local_mph_from_int(int* int_array, size_t nkeys);
 int find_local_id(cmph_t* hash, uint32_t key);
 
 void printProgressBar(int now, int all);
+
+int* get_all_meshes_in_1st_mesh(int meshid_1);
 
 #endif //MESHID_OPS_H

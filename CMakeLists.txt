@@ -81,6 +81,13 @@ add_executable(create_hdf5_database_from_pg
 target_link_libraries(create_hdf5_database_from_pg
         hdf5_lib
 )
+add_executable(create_hdf5_for_1st_mesh
+        src/create_hdf5_for_1st_mesh.c
+)
+
+target_link_libraries(create_hdf5_for_1st_mesh
+        hdf5_lib
+)
 # Tests
 
 add_executable(test_hdf5_ops

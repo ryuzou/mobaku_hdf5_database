@@ -237,3 +237,27 @@ void printProgressBar(int now, int all) {
     printf("] %6.2f %%  %d/%d", progress * 100.0, now, all);
     fflush(stdout);
 }
+
+int * get_all_meshes_in_1st_mesh(int meshid_1) {
+    int *mesh_ids = (int*)malloc(NUM_MESHES_1ST * sizeof(int));
+    if (mesh_ids == NULL) {
+        fprintf(stderr, "malloc failed\n");
+        return NULL;
+    }
+
+    int index = 0;
+    for (int q = 0; q < 8; q++) {
+        for (int v = 0; v < 8; v++) {
+            for (int r = 0; r < 10; r++) {
+                for (int w = 0; w < 10; w++) {
+                    for (int s = 0; s < 4; s++) {
+                        int m = s + 1;
+                        int mesh_id = meshid_1 * 100000 + q * 10000 + v * 1000 + r * 100 + w * 10 + m;
+                        mesh_ids[index++] = mesh_id;
+                    }
+                }
+            }
+        }
+    }
+    return mesh_ids;
+}

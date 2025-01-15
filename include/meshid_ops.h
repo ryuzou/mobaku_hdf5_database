@@ -29,14 +29,12 @@ extern unsigned char _binary_meshid_mobaku_mph_size[];
 #endif
 
 #define REFERENCE_MOBAKU_DATETIME "2016-01-01 00:00:00"
+static const time_t REFERENCE_MOBAKU_TIME = 1451574000;
 
 static const int64_t POSTGRES_EPOCH_IN_UNIX = 946684800LL;
 
 // AWARE !!! HARD CODED !!!
 static const int64_t JST_OFFSET_SEC = 9 * 3600;
-
-const int NUM_MESHES_1ST = 25600;
-
 
 time_t pg_bin_timestamp_to_jst(const char *bin_ptr, int len);
 
@@ -66,6 +64,6 @@ int find_local_id(cmph_t* hash, uint32_t key);
 
 void printProgressBar(int now, int all);
 
-int* get_all_meshes_in_1st_mesh(int meshid_1);
+int* get_all_meshes_in_1st_mesh(int meshid_1, int NUM_MESHES);
 
 #endif //MESHID_OPS_H

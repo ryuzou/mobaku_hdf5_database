@@ -56,17 +56,7 @@ int get_time_index_mobaku_datetime(char* now_time_str) {
 }
 
 int get_time_index_mobaku_datetime_from_time(time_t now_time) {
-    constexpr struct tm reference_time_tm = {0};
-    if (strptime(REFERENCE_MOBAKU_DATETIME, "%Y-%m-%d %H:%M:%S", &reference_time_tm) == NULL) {
-        fprintf(stderr, "Failed to parse first datetime_str\n");
-        return -1;
-    }
-    time_t reference_mobaku_time = mktime(&reference_time_tm);
-
-    if (reference_mobaku_time == (time_t)-1) {
-        fprintf(stderr, "Failed to create reference time\n");
-        return -1;
-    }
+    time_t reference_mobaku_time = REFERENCE_MOBAKU_TIME;
 
     if (now_time == (time_t)-1) {
         fprintf(stderr, "Failed to create now time\n");
@@ -220,7 +210,7 @@ int find_local_id(cmph_t *hash, uint32_t key) {
 }
 
 void printProgressBar(int now, int all) {
-    const int barWidth = 50;
+    const int barWidth = 20;
 
     double progress = (double)(now) / (double)all;
     int pos = (int)(barWidth * progress);
@@ -238,8 +228,8 @@ void printProgressBar(int now, int all) {
     fflush(stdout);
 }
 
-int * get_all_meshes_in_1st_mesh(int meshid_1) {
-    int *mesh_ids = (int*)malloc(NUM_MESHES_1ST * sizeof(int));
+int * get_all_meshes_in_1st_mesh(int meshid_1, int NUM_MESHES) {
+    int *mesh_ids = (int*)malloc(NUM_MESHES * sizeof(int));
     if (mesh_ids == NULL) {
         fprintf(stderr, "malloc failed\n");
         return NULL;

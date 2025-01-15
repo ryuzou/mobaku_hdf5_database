@@ -34,7 +34,8 @@ typedef struct {
     int rows;
     int cols;
     int *data;
-    int meshid_start;
+    uint32_t meshid_start;
+    cmph_t *local_hash;
 } PQdataMatrix;
 
 typedef struct {
@@ -122,6 +123,7 @@ void *producer(void *arg) {
         qdata_matrix->cols = meshid_list->meshid_number; // 取得するデータ数（mesh_idの数）
         qdata_matrix->data = (int *)malloc(sizeof(int) * qdata_matrix->rows * qdata_matrix->cols);
         qdata_matrix->meshid_start = meshid_list->meshid_list[0];
+        cmph_t *local_hash = create_local_mph_from_int(meshid_list->meshid_list, meshid_list->meshid_number);
         memset(qdata_matrix->data, 0, sizeof(int) * qdata_matrix->rows * qdata_matrix->cols);
         if (qdata_matrix->data == NULL) {
             perror("malloc failed");
@@ -150,8 +152,6 @@ void *producer(void *arg) {
             continue;
         }
 
-        cmph_t *local_hash = create_local_mph_from_int(meshid_list->meshid_list, meshid_list->meshid_number);
-
         for (int j = 0; j < num_rows; j++) {
             int32_t meshid_value = ntohl(*((int32_t *)PQgetvalue(res, j, idx_mesh)));
             int32_t population = ntohl(*((int32_t *)PQgetvalue(res, j, idx_population)));
@@ -165,7 +165,6 @@ void *producer(void *arg) {
             int meshid_index = find_local_id(local_hash, meshid_value);
             qdata_matrix->data[time_index * qdata_matrix->cols + meshid_index] = population;    //row-major
         }
-        cmph_destroy(local_hash);
         PQclear(res);
         enqueue(data_queue, qdata_matrix);
         free_meshid_list(meshid_list);
@@ -178,15 +177,14 @@ void *producer(void *arg) {
 typedef struct {
     FIFOQueue *queue;
     hid_t hdf5_file_id;
-    cmph_t *global_hash;
-    int total_meshes;
+    uint32_t *all_meshes;
+    int num_meshes;
 } ConsumerArgs;
 
 void *consumer(void *consumer_args) {
     ConsumerArgs *args = (ConsumerArgs *)consumer_args;
     FIFOQueue *q = args->queue;
     hid_t file_id = args->hdf5_file_id;
-    cmph_t *hash_for_all_mesh = args->global_hash;
     int nulp_counter = 0;
 
     // データセットの作成準備
@@ -217,7 +215,8 @@ void *consumer(void *consumer_args) {
     }
 
     int processed_meshes = 0; // プログレスバー用カウンタ (処理済みメッシュ数)
-    int total_meshes = args->total_meshes; // プログレスバー用合計メッシュ数
+    int total_meshes = args->num_meshes; // プログレスバー用合計メッシュ数
+    cmph_t *local_hash = create_local_mph_from_int(args->all_meshes, total_meshes);
 
     while (true) {
         PQdataMatrix *m = dequeue(q);
@@ -235,14 +234,22 @@ void *consumer(void *consumer_args) {
         hsize_t count[2];
 
         offset[0] = 0; // 常に先頭から
-        offset[1] = find_local_id(hash_for_all_mesh, m->meshid_start); // 書き込み開始のメッシュID
+        int global_mesh_index = find_local_id(local_hash, m->meshid_start);
+        if (global_mesh_index == -1) {
+            fprintf(stderr, "Error: mesh ID %u not found in global list.\n", m->meshid_start);
+            free_pqdata_matrix(m);
+            continue;
+        }
+        offset[1] = global_mesh_index; // 書き込み開始のメッシュID
 
         count[0] = m->rows;
         count[1] = m->cols;
 
         hid_t memspace_id = H5Screate_simple(2, count, NULL);
         hid_t dataset_space_id = H5Dget_space(dataset_id);
-        H5Sselect_hyperslab(dataset_space_id, H5S_SELECT_SET, offset, NULL, count, NULL);
+        hsize_t selected_offset[2] = {offset[0], offset[1]};
+        hsize_t selected_count[2] = {count[0], count[1]};
+        H5Sselect_hyperslab(dataset_space_id, H5S_SELECT_SET, selected_offset, NULL, selected_count, NULL);
 
         herr_t status = H5Dwrite(dataset_id, H5T_NATIVE_INT, memspace_id, dataset_space_id, H5P_DEFAULT, m->data);
         if (status < 0) {
@@ -264,17 +271,25 @@ void *consumer(void *consumer_args) {
     pthread_exit(NULL);
 }
 
+typedef struct {
+    FIFOQueue *meshid_queue;
+    uint32_t *all_meshes;
+    int num_meshes;
+} MeshlistProducerArgs;
+
 void *meshlist_producer(void *arg) {
-    FIFOQueue *meshid_queue = (FIFOQueue *)arg;
+    MeshlistProducerArgs *args = (MeshlistProducerArgs *)arg;
+    FIFOQueue *meshid_queue = args->meshid_queue;
+    uint32_t *all_meshes = args->all_meshes;
+    int mesh_count = args->num_meshes;
     int i;
-    int mesh_count = meshid_list_size;
 
     for (i = 0; i < (int)(mesh_count / MESHLIST_ONCE_LEN); ++i) {
         uint32_t *meshid_once_list = (uint32_t *)malloc(MESHLIST_ONCE_LEN * sizeof(uint32_t));
         MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
         m->meshid_number = MESHLIST_ONCE_LEN;
         for (int j = 0; j < MESHLIST_ONCE_LEN; ++j) {
-            meshid_once_list[j] = meshid_list[i * MESHLIST_ONCE_LEN + j];
+            meshid_once_list[j] = all_meshes[i * MESHLIST_ONCE_LEN + j];
         }
         m->meshid_list = meshid_once_list;
         enqueue(meshid_queue, m);
@@ -284,7 +299,7 @@ void *meshlist_producer(void *arg) {
         MeshidList *m = (MeshidList *)malloc(sizeof(MeshidList));
         m->meshid_number = (mesh_count % MESHLIST_ONCE_LEN);
         for (int j = 0; j < mesh_count % MESHLIST_ONCE_LEN; ++j) {
-            meshid_once_list[j] = meshid_list[i * MESHLIST_ONCE_LEN + j];
+            meshid_once_list[j] = all_meshes[i * MESHLIST_ONCE_LEN + j];
         }
         m->meshid_list = meshid_once_list;
         enqueue(meshid_queue, m);
@@ -304,7 +319,8 @@ int main(int argc, char* argv[]) {
         env_filepath = argv[1];
     }
     int mesh1st = 5033;
-    int *all_meshes = get_all_meshes_in_1st_mesh(mesh1st);
+    int NUM_MESHES_1ST = 25600;
+    int *all_meshes = get_all_meshes_in_1st_mesh(mesh1st, NUM_MESHES_1ST);
 
     if (!load_env_from_file(env_filepath)) {
         fprintf(stderr, "Failed to load environment from %s\n", env_filepath);
@@ -327,7 +343,7 @@ int main(int argc, char* argv[]) {
     init_queue(&meshid_queue);
 
     // HDF5 ファイルを作成
-    const char* hdf5_filepath = "/db1/h5/mesh1st.h5";
+    const char* hdf5_filepath = "/db1/h5/mesh1st_5033.h5";
     hid_t file_id = H5Fcreate(hdf5_filepath, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
     if (file_id < 0) {
         fprintf(stderr, "Failed to create HDF5 file: %s\n", hdf5_filepath);
@@ -361,7 +377,12 @@ int main(int argc, char* argv[]) {
     if (pthread_attr_setaffinity_np(&attr, sizeof(cpu_set_t), &cpuset) != 0) {
         perror("pthread_attr_setaffinity_np failed for meshlist_producer");
     }
-    if (pthread_create(&meshlist_producer_pthread, &attr, meshlist_producer, &meshid_queue) != 0) {
+    MeshlistProducerArgs mpl_args = {
+        .meshid_queue = &meshid_queue,
+        .all_meshes = all_meshes,
+        .num_meshes = NUM_MESHES_1ST
+    };
+    if (pthread_create(&meshlist_producer_pthread, &attr, meshlist_producer, &mpl_args) != 0) {
         perror("pthread_create failed for meshlist_producer");
         return 1;
     }
@@ -394,13 +415,11 @@ int main(int argc, char* argv[]) {
         perror("pthread_attr_setaffinity_np failed for consumer");
     }
 
-    int mesh_count = meshid_list_size;
-
     ConsumerArgs consumer_args;
     consumer_args.queue = &data_queue;
     consumer_args.hdf5_file_id = file_id;
-    consumer_args.global_hash = prepare_search();
-    consumer_args.total_meshes = mesh_count;
+    consumer_args.num_meshes = NUM_MESHES_1ST;
+    consumer_args.all_meshes = all_meshes;
     if (pthread_create(&consumer_thread, &attr, consumer, &consumer_args) != 0) {
         perror("pthread_create failed for consumer");
         // HDF5 ファイルをクローズ (エラー処理)
@@ -417,5 +436,7 @@ int main(int argc, char* argv[]) {
     pthread_join(consumer_thread, NULL);
 
     printf("All threads finished.\n");
+
+    free(all_meshes);
     return 0;
 }

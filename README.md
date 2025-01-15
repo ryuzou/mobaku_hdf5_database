@@ -12,4 +12,7 @@ cmake ..
 make
 ```
 # Usage
-to be written
+`cp .env.example build/.env`  
+fill in credentials in `.env` file
+## Usage with pre-build binaries
+Download binaries from [releases](
